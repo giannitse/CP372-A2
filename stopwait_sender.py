@@ -6,7 +6,6 @@ import socket
 import struct
 import os
 import time
-import random
 import sys
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -14,9 +13,9 @@ RECEIVER_IP   = "127.0.0.1"
 RECEIVER_PORT = 9000
 SENDER_PORT   = 9001
 BUFFER_SIZE   = 4096
-PAYLOAD_SIZE  = 1024
-TIMEOUT       = 1.0
-MAX_RETRIES   = 20
+PAYLOAD_SIZE  = 1024        # bytes per data packet
+TIMEOUT       = 1.0         # seconds before retransmission
+MAX_RETRIES   = 20          # give up after this many consecutive timeouts
 
 # ─── Packet Types ─────────────────────────────────────────────────────────────
 TYPE_DATA  = 0
@@ -25,6 +24,8 @@ TYPE_START = 2   # notify receiver a file transfer is starting
 TYPE_END   = 3   # notify receiver file transfer is complete
 
 # ─── Packet Format ────────────────────────────────────────────────────────────
+# Header: seq_num (4B) | ack_num (4B) | pkt_type (1B) | payload_len (2B)
+#         = 11 bytes total header
 HEADER_FMT  = "!IIBh"      # network byte order: uint32, uint32, uint8, int16
 HEADER_SIZE = struct.calcsize(HEADER_FMT)   # 11 bytes
 
@@ -106,6 +107,7 @@ def transfer_file(filepath: str):
     # ── Step 2: Send file chunks ───────────────────────────────────────────────
     with open(filepath, "rb") as f:
         chunk_index = 0
+        bytes_sent = 0
         while True:
             chunk = f.read(PAYLOAD_SIZE)
             if not chunk:
@@ -116,11 +118,11 @@ def transfer_file(filepath: str):
             total_retransmits += txs - 1
 
             chunk_index += 1
+            bytes_sent += len(chunk)
             if chunk_index % 50 == 0 or len(chunk) < PAYLOAD_SIZE:
                 elapsed = time.time() - start_time
-                sent_bytes = chunk_index * PAYLOAD_SIZE
-                throughput = sent_bytes / elapsed if elapsed > 0 else 0
-                print(f"  [Progress] chunk={chunk_index}, seq={seq}, "
+                throughput = bytes_sent / elapsed if elapsed > 0 else 0
+                print(f"  [Progress] chunk={chunk_index}, seq={seq}, sent={bytes_sent}B, "
                       f"elapsed={elapsed:.2f}s, throughput={throughput/1024:.1f} KB/s")
 
             seq += 1
@@ -146,7 +148,7 @@ def transfer_file(filepath: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        # Default: create a small test file and send it
+        # Default: create test file
         test_file = "test_input.txt"
         if not os.path.exists(test_file):
             with open(test_file, "wb") as f:

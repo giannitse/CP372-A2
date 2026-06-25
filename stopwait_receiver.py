@@ -13,8 +13,8 @@ import sys
 RECEIVER_IP   = "0.0.0.0"
 RECEIVER_PORT = 9000
 BUFFER_SIZE   = 4096
-OUTPUT_DIR    = "received_files"
-LOSS_RATE     = 0.0
+OUTPUT_DIR    = "received_files"    # directory where received files are saved
+LOSS_RATE     = 0.0                 # set to e.g. 0.1 for 10% simulated packet loss
 
 # ─── Packet Types ─────────────────────────────────────────────────────────────
 TYPE_DATA  = 0
