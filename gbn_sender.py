@@ -16,13 +16,14 @@ PAYLOAD_SIZE = 1024
 BUFFER_SIZE = 4096
 WINDOW_SIZE = 4
 TIMEOUT = 1
+MAX_RETRANSMITS = 30
 
 TYPE_DATA  = 0
 TYPE_ACK   = 1
 TYPE_START = 2   # notify receiver a file transfer is starting
 TYPE_END   = 3   # notify receiver file transfer is complete
 
-HEADER_FMT  = "!iibhh"      # network byte order: uint32, uint32, uint8, int16, uint16
+HEADER_FMT  = "!iibHH"      # network byte order: uint32, uint32, uint8, int16, uint16
 HEADER_SIZE = struct.calcsize(HEADER_FMT)   # 11 bytes
 
 #Calculates checksum to check network efficacy 
@@ -125,32 +126,37 @@ def transfer_file(filepath: str):
     f = open(filepath, 'rb')
     #calculate the total packets for the receiver to receive, using ceiling function, and accounting for start packet
     total_packs = (-(os.path.getsize(filepath)// -PAYLOAD_SIZE)) + 1
-    #temporarily set chunk to True to enter the while loop
+    
+    transmission_fin = False
+    
+    retries = 0
 #
-    while base < total_packs:
+    while base < total_packs and retries < MAX_RETRANSMITS:
         
         availableaWndwSize = WINDOW_SIZE - (len(packs_to_send) + len(packs_in_transit))
         
-        if availableaWndwSize >= 0:
+        if availableaWndwSize > 0 and not transmission_fin:
             
             for i in range(availableaWndwSize):
                 
                 chunk = f.read(PAYLOAD_SIZE)
                 
                 if not chunk:
-                    
+                    transmission_fin = True
                     break
                 
                 packs_to_send.append(build_packet(seq, 0, TYPE_DATA, chunk))
                 
                 seq += 1
 
-                
-        send_packets(sock, packs_to_send, pack_dest)
+# check if there are packets to send
+        if packs_to_send:
+            
+            send_packets(sock, packs_to_send, pack_dest)
         
-        packs_in_transit.extend(packs_to_send)
+            packs_in_transit.extend(packs_to_send)
         
-        packs_to_send = []
+            packs_to_send = []
         
         sock.setblocking(False)
         
@@ -158,13 +164,13 @@ def transfer_file(filepath: str):
         
         acked = False
         
-#        
+# Receive all acks currently in buffer, find the highest ack and use that as the basis for sliding the window up
         while True:
             
             try:
-                
+                # receive the ack value from the selected packet
                 ack = parse_packet(sock.recvfrom(BUFFER_SIZE)[0])[1]
-                
+                # compare against base (first iteration) / highest received ack so far
                 if ack > highest_ack:
                     
                     highest_ack = ack
@@ -172,54 +178,73 @@ def transfer_file(filepath: str):
                     acked = True
                     
                     print(f"Received Ack: {ack}")
-            
+
+                    
+            # End loop when buffer is empty
             except BlockingIOError:
                 
                 break
-            
+            # Just incase anything else happens we break the loop and ignore the acks, allowing resending of data packets from the current window base
             except Exception as e:
                 
                 print(f"Error '{e}' occurred, if this continues, close program and ensure receiver is operating")
                 
                 break
             
-#           
+# Check if the highest ack was updated (if an ack was received that acknowledges an in-transit-packet) in this cycle    
         if acked:
-            
-            inc = (highest_ack - base) + 1
-            
-            base = highest_ack + 1
-            
-            packs_in_transit = packs_in_transit[inc:]
+            # how much to slide the window by
+            inc = highest_ack - base + 1
+            # checking if inc progresses window or not
+            if inc > 0:
+                # adjust base using same above formula, just reorganized
+                base = highest_ack + 1
+                # remove acknowledged packet from the in transit window
+                packs_in_transit = packs_in_transit[inc:]
             
             timeoutClock = time.time()
             
-#
+            retries = 0
+            
+        time.sleep(0.001)
+            
+# Manually check for timeout
+# we have to manually check because we set blocking to false so we can process multiple ack messages in one cycle
         if base < total_packs and (time.time() - timeoutClock) > TIMEOUT:
             
-            seq = base
-            
             print(f"Connection timeout, ensure receiver is operational. Packets lost, adjusting window")
-            
+            # place the in-transit packets back into the sending list
             packs_to_send.extend(packs_in_transit)
-            
+            # keep track of how many packets are retransmitted / not received
             packets_lost += len(packs_in_transit)
-            
+            # remove the packets from the in-transit list
             packs_in_transit = []
             
+            retries += 1
             
-    print("Sending END packet...")
+            print(f"Retransmit: {retries} / {MAX_RETRANSMITS}")
+            
+    if retries >= MAX_RETRANSMITS:
+        
+        print(f"Unable to establish stable transfer state with receiver, closing sender")
+            
+    else:
+         
+        print("Sending END packet...")
+        
+        send_packets(sock, [build_packet(seq, 0, TYPE_END)], pack_dest)
+        
+        timeoutClock = time.time()
+                    
+        throughputAvg = os.path.getsize(filepath) / (time.time() - start_time)
+            
+        print(f"Finished transfer, Summary:\nDuration: {time.time() - start_time:.4f} Seconds\nFile Size: {os.path.getsize(filepath)} Bytes\nAverage Throughput: {throughputAvg/1024:.2f} KB/s\nLost Packets: {packets_lost}")
     
-    send_packets(sock, [build_packet(seq, 0, TYPE_END)], pack_dest)
     
     f.close()
     
     sock.close()
     
-    throughputAvg = os.path.getsize(filepath) / (time.time() - start_time)
-    
-    print(f"Finished transfer, Summary:\nDuration: {time.time() - start_time:.4f} Seconds\nFile Size: {os.path.getsize(filepath)} Bytes\nAverage Throughput: {throughputAvg/1024:.2f} KB/s\nLost Packets: {packets_lost}")
-            
     return
 
 
