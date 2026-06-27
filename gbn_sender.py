@@ -15,7 +15,7 @@ SEND_PORT = 9001
 PAYLOAD_SIZE = 1024
 BUFFER_SIZE = 4096
 WINDOW_SIZE = 4
-TIMEOUT = 0.25
+TIMEOUT = 0.1
 MAX_RETRANSMITS = 30
 
 TYPE_DATA  = 0
@@ -122,44 +122,43 @@ def transfer_file(filepath: str):
     f = open(filepath, 'rb')
     #calculate the total packets for the receiver to receive, using ceiling function, and accounting for start packet
     total_packs = (-(os.path.getsize(filepath)// -PAYLOAD_SIZE)) + 1
-    
+    # boolean for tracking whether transmission is finished or ongoing
     transmission_fin = False
-    
+    # counter for amound of retransmissions of a certain packet
     retries = 0
-#
+# while there is still data to transfer and no retransmission timeout, main while loop for transfer
     while base < total_packs and retries < MAX_RETRANSMITS:
-        
+        # calculates the amount of packets that can be built and sent based on how many are already: in transit and to be sent (how full the window already is)
         availableaWndwSize = WINDOW_SIZE - (len(packs_to_send) + len(packs_in_transit))
-        
+        # if there is space in the window and the transmission is ongoing
         if availableaWndwSize > 0 and not transmission_fin:
-            
+            # for each available space
             for i in range(availableaWndwSize):
-                
+                # read chunk from source file
                 chunk = f.read(PAYLOAD_SIZE)
-                
+                # if chunk empty, no data left to be read, transmission finished
                 if not chunk:
                     transmission_fin = True
                     break
-                
+                # append a packet with the current chunk to the list of packets to be sent in this cycle
                 packs_to_send.append(build_packet(seq, 0, TYPE_DATA, chunk))
-                
+                # increment sequence
                 seq += 1
 
 # check if there are packets to send
         if packs_to_send:
-            
+            # send packets in packs_to_send list
             send_packets(sock, packs_to_send, pack_dest)
-            
+            # show which packets were sent this cycle
             print(f"Sent packets from {base}:{seq - 1}")
-        
+            # move the packets that were just sent to the receiver into the packs_in_transit list and clear packs_to_send
             packs_in_transit.extend(packs_to_send)
-        
             packs_to_send = []
-        
+        # set blocking to false so we can read multiple times from the buffer until it is clear
         sock.setblocking(False)
-        
+        # set highest acknowedgement value received to below the base
         highest_ack = base - 1
-        
+        # tracker for if sender received an ack message this cycle
         acked = False
         
 # Receive all acks currently in buffer, find the highest ack and use that as the basis for sliding the window up
@@ -170,11 +169,11 @@ def transfer_file(filepath: str):
                 ack = parse_packet(sock.recvfrom(BUFFER_SIZE)[0])[1]
                 # compare against base (first iteration) / highest received ack so far
                 if ack > highest_ack and ack >= base:
-                    
+                    # set highest receieved to current ack
                     highest_ack = ack
-                    
+                    # sender did receive an ack, so we track it
                     acked = True
-                    
+                    # show which ack was received 
                     print(f"Received Ack: {ack}")
 
                     
@@ -201,9 +200,9 @@ def transfer_file(filepath: str):
                 base = highest_ack + 1
                 # remove acknowledged packet from the in transit window
                 packs_in_transit = packs_in_transit[inc:]
-            
+            # manually set timeout clock because blocking is not active and the socket.settimeout can't be used
             timeoutClock = time.time()
-            
+            # reset retries on successful transfer of packet
             retries = 0
             
         
@@ -219,35 +218,37 @@ def transfer_file(filepath: str):
             packets_lost += len(packs_in_transit)
             # remove the packets from the in-transit list
             packs_in_transit = []
-            
+            #increment retries by one for each timeout
             retries += 1
+            # on timeout reset the timeout clock so that it doesn't cause a domino effect of multiple timeouts in a row due to a constantly increasing value
+            timeoutClock = time.time()
             
             print(f"Retransmit: {retries} / {MAX_RETRANSMITS}")
-            
-        time.sleep(0.001)    
+        # sleep so cpu is not running 100% (noisy computah)
+        time.sleep(0.001)
         
         
         
-        
+        # if max retries is reached, close
     if retries >= MAX_RETRANSMITS:
             
         print(f"Unable to establish stable transfer state with receiver, closing sender")
             
     else:
-         
+        # if transfer went ok, send end packet
         print("Sending END packet...")
         
         send_packets(sock, [build_packet(seq, 0, TYPE_END)], pack_dest)
         
         timeoutClock = time.time()
-                    
+                    # calculate average throughput using total bytes over time spent
         throughputAvg = os.path.getsize(filepath) / (time.time() - start_time)
-            
+            # transmission summary
         print(f"Finished transfer, Summary:\nDuration: {time.time() - start_time:.4f} Seconds\nFile Size: {os.path.getsize(filepath)} Bytes\nAverage Throughput: {throughputAvg/1024:.2f} KB/s\nLost Packets: {packets_lost}")
     
     
     f.close()
-    
+    # close socket and file
     sock.close()
     
     return
@@ -265,4 +266,4 @@ if __name__ == "__main__":
     else:
         filepath = sys.argv[1]
 
-    transfer_file("pic\WIN_20260403_23_57_52_Pro.jpg")
+    transfer_file(filepath)

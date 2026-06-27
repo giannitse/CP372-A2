@@ -94,21 +94,21 @@ def simulate_loss() -> bool:
     return LOSS_RATE > 0.0 and random.random() < LOSS_RATE
 
 def simulate_corrupt() -> bool:
-
+# determine whether or not to corrupt a packet
     return CORRUPTION_RATE > 0.0 and random.random() < LOSS_RATE
 
 def active():
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
+    # create socket and dir
     sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    
+    # bind socket
     sock.bind((RECEIVER_IP, RECEIVER_PORT))
-    
+    # main listening loop
     while True:
         
         print("Waiting for transfer start packet...")
-        
+        # reset all local variables to defaults
         expected_seq = None
         filename     = None
         filesize     = None
@@ -117,19 +117,20 @@ def active():
         packets_received = 0
         packets_dropped  = 0
         start_time   = None
-        
+        # set blocking to true for each seperate file transfer, this will do nothing on first transfer, but during file transfer we set blocking to false, 
+        # so for second transfer and beyond we need to reset
         sock.setblocking(True)
-            
+            # listen for start packet
         while True:
-            
+            # try to read a packet from buffer
             data, sender_addr = sock.recvfrom(BUFFER_SIZE)
-            
+            # simulate packet loss
             if simulate_loss():
                 
                 packets_dropped += 1
                 print("Simulated packet loss occurred, ignoring this packet's arrival")
                 continue
-            
+            # simulate corruption
             if simulate_corrupt():
                 
                 print("Corrupted packet checksum")
@@ -139,7 +140,7 @@ def active():
                 packArray[-2] = 0x00
                 
                 data = bytes(packArray)
-            
+            # unpack payload from start packet
             try:
                 
                 seq, ack, pktType, payload, checksum = parse_packet(data)
@@ -150,15 +151,18 @@ def active():
                 # set packet type to a number that wont allow this packet to be processed, skipping all if statements and looping back around to pick up another packet
                 pktType = -1
                 
-                
+                # ensure proper transfer, no data modified or lost
             newCheck = calculate_checksum(seq, ack, pktType, payload)
-            
+            # if not valid data, skip this packet, this portion should be below the if pktType == TYPE_START if statement following best practice,
+            # but too much work to change at this point, the placement has minimal to no effect on the program
             if not validChkSum(checksum, newCheck):     
                   
-                  print(f"Checksum not valid, data possibly lost in transfer for packet: {seq}")
-                  
-                  packets_dropped += 1
+                print(f"Checksum not valid, data possibly lost in transfer for packet: {seq}")
+                # incremennt dropped packet counter
+                packets_dropped += 1
                 
+                continue
+                # if start packet received
             if pktType == TYPE_START:
                     
                 # Parse metadata: "filename:filesize"
@@ -169,11 +173,11 @@ def active():
                 except Exception:
                     filename = f"transfer_{int(time.time())}.bin"
                     filesize = -1   # unknown
-                    
+                    # set transfer start time
                 start_time = time.time()    
-                
+                # note the current time as of first packet, also oldest packet received
                 timeoutTime = time.time()
-                
+                # set base expected seq
                 expected_seq = seq
                     
                 print(f"[Receiver] START received from {sender_addr}")
@@ -186,40 +190,40 @@ def active():
                 # ACK the START
                 send_ack(sock, expected_seq, sender_addr)
                 print(f"  [ACK] Sent ACK for START seq={expected_seq}")
-                    
-                expected_seq += 1
+                    # receiver now expects next packet sequence number
+                expected_seq = seq + 1
                 break
-            
-                print("ONE")
                     
             else:
                     
                 print(f"Incorrect packet type received, expecting start packet")
-                    
+            # keep track of whether file transfer finished
         fin_transfer = False
-        
+        # set blocking false so we can read multiple packets from buffer, the original program attempted to implement batch processing of packets received,
+        # this was done to minimize amount of ack messages sent, however it proved challenging, buggy, and slow to implement. (at least how I did it, may try again after submission)
+        # At least I now understand why Go Back N receivers have window size of 1...
         sock.setblocking(False)
 # begin receiving data packets
         while not fin_transfer:
-            
+            # tracker to check whether a packet was received in this cycle or not
             packedProcessing = True
-            
+            # set the highest ack to the seq num of the last successfully received packet
             highest_seq = expected_seq - 1
-
+        # buffer reading loop
             while True:
                 
                 try:
-                
+                # read packet from buffer
                     pack_data, sender_addr = sock.recvfrom(BUFFER_SIZE)
-                    
+                    # update receival time
                     timeoutTime = time.time()
-                    
+                # if buffer empty, set packet processing tracker to false
                 except BlockingIOError:
                     
                     packedProcessing = False
                     
                     break
-                
+                # if something happens to socket or network
                 except ConnectionResetError:
                     
                     print("Connection Closed")
@@ -228,104 +232,94 @@ def active():
                     
                     break
             
-                        
-                if simulate_loss():
-                        
-                    packets_dropped += 1
-                            
-                    print("Simulated packet loss occurred, ignoring this packet's arrival")
-                            
-                    continue
-                        
-                if simulate_corrupt():
-                            
-                    print("Corrupted packet checksum")
-                            
-                    packArray = bytearray(pack_data)
-                            
-                    packArray[-2] = 0x00
-                            
+                # already commented on these 
+                if simulate_loss():       
+                    packets_dropped += 1          
+                    print("Simulated packet loss occurred, ignoring this packet's arrival")    
+                    continue 
+                if simulate_corrupt():                            
+                    print("Corrupted packet checksum")                            
+                    packArray = bytearray(pack_data)                            
+                    packArray[-2] = 0x00                           
                     pack_data = bytes(packArray)
-                    
+                # unpack packet header, data
                 try:
                                     
                     seq, ack, pktType, payload, checksum = parse_packet(pack_data)
-                                
+                    # calculate the packet checksum
                     newCheck = calculate_checksum(seq, ack, pktType, payload)
-                                
+                    # if packet values are misaligned or imroperly built
                 except ValueError:
                                 
                     print(f"ValueError, malformed packet from sender {sender_addr}, dropping.")
-
+                    #skip over packet
                     continue
                                 
-                                
+                # if data is inconsistent, skip packet    
                 if not validChkSum(checksum, newCheck):
                             
                     print(f"Checksum not valid, data possibly lost in transfer for packet: {seq}, dropping")
-
+                # increment packets dropped counter
                     packets_dropped += 1
                             
                     continue
-                                
+                    # if sequence from parsed data is correct  
                 if seq == expected_seq:
-                                    
+                    # if packet is carrying data
                     if pktType == TYPE_DATA:
-                            
+                            # notify the terminal of the seq number
                         print(f"Seq num {seq} received")
-                            
+                            # write the data received to the file
                         outfile.write(payload)
-                            
+                            # increment packets received
                         packets_received += 1
-                            
+                            # add payload len to total bytes received
                         bytes_received += len(payload)
-                            
+                            # packet successfully received, update highest valid sequence
                         highest_seq = seq
-                            
-                        expected_seq += 1
-                            
+                            # expect next packet sequence number
+                        expected_seq = seq + 1
+                    # if end packet received
                     elif pktType == TYPE_END:
-                            
+                        # notify terminal of receieved packet
                         print(f"End packet received, transfer finished")
-                            
+                        # set highest seq to this sequence
                         highest_seq = seq
-                            
+                        # update transfer status tracker
                         fin_transfer = True
-                            
+                        # break out of buffer reading loop
                         break
-                        
+                        # if packet type is not DATA or END
                     else:
-                            
+                        # notify terminal
                         print(f"Unexpected packet type {pktType} received, dropping")
-
+                        # drop packet 
                         packets_dropped += 1
-                            
                         continue
-                        
+                    # after all checks and counter adjustments to ensure correct packet transfer, send ack to sender
                     send_ack(sock, highest_seq, sender_addr)
-                        
+                # if packet sequence does not match
                 else:
-                        
+                    # notify terminal
                     print(f"Out of order packet, dropping seq num {seq}")
-                        
+                    # drop packet
                     packets_dropped += 1
-                            
                     continue
                 
-                
+            # if no packet read from buffer
             if packedProcessing == False:
-                        
+                    # sleep so that cpu is not running 100% in a super speed while loop
                     time.sleep(0.001)
-                    
+                    # check if a timeout occurred
                     if time.time() - timeoutTime > LISTEN_TIMEOUT:
-                        
+                        # notify terminal of timeout
                         print("Timeout, going back to listening for START packet")
-                        
+                        # break out of loop to go back to listening for start
                         break
-                        
+                    
                     continue
                         
-            
+            # summary of transfer from receiver side
         if outfile:
             duration = time.time() - start_time
             throughput = bytes_received/duration
