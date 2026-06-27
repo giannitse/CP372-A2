@@ -15,7 +15,7 @@ SEND_PORT = 9001
 PAYLOAD_SIZE = 1024
 BUFFER_SIZE = 4096
 WINDOW_SIZE = 4
-TIMEOUT = 1
+TIMEOUT = 0.25
 MAX_RETRANSMITS = 30
 
 TYPE_DATA  = 0
@@ -51,9 +51,8 @@ def calculate_checksum(seq, ack, ptype, payload: bytes):
     # invert the 1's and 0's and return
     return (~chkSum & 0xFFFF)
 
-
+# builds a packet with sequence number, ack, type, size of data, and also calculates and packs a checksum value using the above function
 def build_packet(seq: int, ack: int, pkt_type: int, payload: bytes = b"") -> bytes:
-    """Serialize a packet to bytes."""
     
     chk = calculate_checksum(seq, ack, pkt_type, payload)
     
@@ -77,52 +76,49 @@ def send_packets(sock: socket.socket, packets: tuple, dest: tuple):
         sock.sendto(packet, dest)
     
     return
-
+# main transfer function, 90% of this probably should be abstracted, but not enough time... 
 def transfer_file(filepath: str):
-    
+    #checks if file to be transferred exists
     if not os.path.isfile(filepath):
         
         print(f"Error: '{filepath}' not found.") 
         sys.exit(1)
-        
+    #   extracts name and size of file to variables for faster and cleaner access 
     filesize = os.path.getsize(filepath)
     filename = os.path.basename(filepath)
-    
+    # status message
     print(f"[Sender] Transferring '{filename}' ({filesize} bytes) to {REC_IP}:{REC_PORT}")
-    
+    # create socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    
+    # bind socket to local
     sock.bind(("", SEND_PORT))
-    
-    start_time = time.time()
-    
+    # variables to track status of transfer
     pack_dest = (REC_IP, REC_PORT)
-    
     seq = 0
-    
     base = 0
-    
     packets_lost = 0
-    
     packs_in_transit = []
-    
     packs_to_send = []
-
+    retries = 0
     #Send start packet
     print("Sending start packet...")
     
     file_info = f"{filename}:{filesize}".encode("utf-8")
-    
+    # build start packet
     start_packet = build_packet(seq, 0, TYPE_START, file_info)
-    
+    # send start packet to notify receiver of file transfer
     send_packets(sock, [start_packet], pack_dest)
     
+    # mark timestamp at start of sending
+    start_time = time.time()
+    #set timeout clock to time of packet transfer
     timeoutClock = time.time()
     
+    # increase current seq
     seq += 1
-    
+    # update the list that tracks unacknowledged packs
     packs_in_transit.append(start_packet)
-    
+    #   open file for reading raw bytes
     f = open(filepath, 'rb')
     #calculate the total packets for the receiver to receive, using ceiling function, and accounting for start packet
     total_packs = (-(os.path.getsize(filepath)// -PAYLOAD_SIZE)) + 1
@@ -153,6 +149,8 @@ def transfer_file(filepath: str):
         if packs_to_send:
             
             send_packets(sock, packs_to_send, pack_dest)
+            
+            print(f"Sent packets from {base}:{seq - 1}")
         
             packs_in_transit.extend(packs_to_send)
         
@@ -160,7 +158,7 @@ def transfer_file(filepath: str):
         
         sock.setblocking(False)
         
-        highest_ack = base
+        highest_ack = base - 1
         
         acked = False
         
@@ -171,7 +169,7 @@ def transfer_file(filepath: str):
                 # receive the ack value from the selected packet
                 ack = parse_packet(sock.recvfrom(BUFFER_SIZE)[0])[1]
                 # compare against base (first iteration) / highest received ack so far
-                if ack > highest_ack:
+                if ack > highest_ack and ack >= base:
                     
                     highest_ack = ack
                     
@@ -197,6 +195,8 @@ def transfer_file(filepath: str):
             inc = highest_ack - base + 1
             # checking if inc progresses window or not
             if inc > 0:
+                
+                print(f"Adjusting window forward by {inc}")
                 # adjust base using same above formula, just reorganized
                 base = highest_ack + 1
                 # remove acknowledged packet from the in transit window
@@ -206,13 +206,13 @@ def transfer_file(filepath: str):
             
             retries = 0
             
-        time.sleep(0.001)
+        
             
 # Manually check for timeout
 # we have to manually check because we set blocking to false so we can process multiple ack messages in one cycle
         if base < total_packs and (time.time() - timeoutClock) > TIMEOUT:
             
-            print(f"Connection timeout, ensure receiver is operational. Packets lost, adjusting window")
+            print(f"Connection timeout, ensure receiver is operational. Packets lost, retransmitting window")
             # place the in-transit packets back into the sending list
             packs_to_send.extend(packs_in_transit)
             # keep track of how many packets are retransmitted / not received
@@ -224,8 +224,13 @@ def transfer_file(filepath: str):
             
             print(f"Retransmit: {retries} / {MAX_RETRANSMITS}")
             
-    if retries >= MAX_RETRANSMITS:
+        time.sleep(0.001)    
         
+        
+        
+        
+    if retries >= MAX_RETRANSMITS:
+            
         print(f"Unable to establish stable transfer state with receiver, closing sender")
             
     else:
@@ -260,4 +265,4 @@ if __name__ == "__main__":
     else:
         filepath = sys.argv[1]
 
-    transfer_file(filepath)
+    transfer_file("pic\WIN_20260403_23_57_52_Pro.jpg")
