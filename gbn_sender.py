@@ -12,7 +12,7 @@ import sys
 REC_IP = "127.0.0.1"
 REC_PORT = 9000
 SEND_PORT = 9001
-PAYLOAD_SIZE = 1024
+PAYLOAD_SIZE = 2048
 BUFFER_SIZE = 4096
 WINDOW_SIZE = 4
 TIMEOUT = 0.1
@@ -150,7 +150,7 @@ def transfer_file(filepath: str):
             # send packets in packs_to_send list
             send_packets(sock, packs_to_send, pack_dest)
             # show which packets were sent this cycle
-            print(f"Sent packets from {base}:{seq - 1}")
+            print(f"Sent packets from {base}:{seq - 1} out of {total_packs} packets")
             # move the packets that were just sent to the receiver into the packs_in_transit list and clear packs_to_send
             packs_in_transit.extend(packs_to_send)
             packs_to_send = []

@@ -13,8 +13,8 @@ RECEIVER_IP   = "0.0.0.0"
 RECEIVER_PORT = 9000
 BUFFER_SIZE   = 4096
 OUTPUT_DIR    = "received_files"
-LOSS_RATE     = 0.05 # 0 = No packet loss, 1 = 100% packet loss
-CORRUPTION_RATE = 0.05
+LOSS_RATE     = 0.01 # 0 = No packet loss, 1 = 100% packet loss
+CORRUPTION_RATE = 0.01
 LISTEN_TIMEOUT = 8
 
 # ─── Packet Types ─────────────────────────────────────────────────────────────
