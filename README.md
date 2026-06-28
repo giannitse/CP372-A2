@@ -47,12 +47,19 @@ No third-party libraries were used.
 ## Project Structure
 
 project/
+
 ├── CP372_A2_Report.docx
+
 ├── gbn_receiver.py
+
 ├── gbn_sender.py
+
 ├── stopwait_receiver.py
+
 ├── stopwait_sender.py
+
 ├── README.md
+
 └── received_files/
 
 ---
